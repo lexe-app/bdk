@@ -133,7 +133,7 @@ impl GetBlockHash for EsploraBlockchain {
 
 #[maybe_async]
 impl WalletSync for EsploraBlockchain {
-    fn wallet_setup<D: BatchDatabase>(
+    fn wallet_setup<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         _progress_update: Box<dyn Progress>,
@@ -248,5 +248,42 @@ impl ConfigurableBlockchain for EsploraBlockchain {
         }
 
         Ok(blockchain)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use bitcoin::Network;
+
+    use super::*;
+    use crate::database::{AnyDatabase, MemoryDatabase};
+    use crate::wallet::test::get_test_wpkh;
+    use crate::SyncOptions;
+
+    /// A quick test that doesn't actually do anything, but will throw a compile
+    /// error if bdk::Wallet or EsploraBlockchain are not thread-safe.
+    #[tokio::test]
+    async fn esplora_async_wallet_is_thread_safe() {
+        tokio::task::spawn(async move {
+            let descriptors = testutils!(@descriptors (get_test_wpkh()));
+            let wallet = Wallet::new(
+                &descriptors.0,
+                None,
+                Network::Regtest,
+                AnyDatabase::Memory(MemoryDatabase::new()),
+            )
+            .unwrap();
+            let wrapped_wallet = Arc::new(tokio::sync::Mutex::new(wallet));
+
+            let esplora = EsploraBlockchain::new("localhost:8000", 20);
+            let sync_options = SyncOptions { progress: None };
+            let _ = wrapped_wallet
+                .lock()
+                .await
+                .sync(&esplora, sync_options)
+                .await;
+        });
     }
 }

@@ -116,7 +116,7 @@ impl FullyNodedExport {
     ///
     /// If the database is empty or `include_blockheight` is false, the `blockheight` field
     /// returned will be `0`.
-    pub fn export_wallet<D: BatchDatabase>(
+    pub fn export_wallet<D: BatchDatabase + Send + Sync>(
         wallet: &Wallet<D>,
         label: &str,
         include_blockheight: bool,

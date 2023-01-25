@@ -48,7 +48,7 @@ use bitcoincore_rpc::Auth as RpcAuth;
 use bitcoincore_rpc::{Client, RpcApi};
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -192,7 +192,7 @@ impl GetBlockHash for RpcBlockchain {
 }
 
 impl WalletSync for RpcBlockchain {
-    fn wallet_setup<D>(&self, db: &RefCell<D>, prog: Box<dyn Progress>) -> Result<(), Error>
+    fn wallet_setup<D>(&self, db: &RwLock<D>, prog: Box<dyn Progress>) -> Result<(), Error>
     where
         D: BatchDatabase,
     {

@@ -165,7 +165,7 @@ pub trait Database: BatchOperations {
 /// This trait defines the methods to start and apply a batch of operations.
 pub trait BatchDatabase: Database {
     /// Container for the operations
-    type Batch: BatchOperations;
+    type Batch: BatchOperations + Send;
 
     /// Create a new batch container
     fn begin_batch(&self) -> Self::Batch;

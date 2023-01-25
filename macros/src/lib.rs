@@ -33,7 +33,7 @@ fn add_async_trait(mut parsed: ItemTrait) -> TokenStream {
         #output
 
         #[cfg(feature = "async-interface")]
-        #[async_trait(?Send)]
+        #[async_trait]
         #parsed
     };
 
@@ -74,7 +74,7 @@ fn add_async_impl_trait(mut parsed: ItemImpl) -> TokenStream {
         #output
 
         #[cfg(feature = "async-interface")]
-        #[async_trait(?Send)]
+        #[async_trait]
         #parsed
     };
 

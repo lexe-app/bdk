@@ -172,7 +172,7 @@ pub struct SyncOptions {
 
 impl<D> Wallet<D>
 where
-    D: BatchDatabase,
+    D: BatchDatabase + Send + Sync,
 {
     #[deprecated = "Just use Wallet::new -- all wallets are offline now!"]
     /// Create a new "offline" wallet
@@ -1740,7 +1740,7 @@ where
 
     /// Sync the internal database with the blockchain
     #[maybe_async]
-    pub fn sync<B: WalletSync + GetHeight>(
+    pub fn sync<B: WalletSync + GetHeight + Send + Sync>(
         &self,
         blockchain: &B,
         sync_opts: SyncOptions,

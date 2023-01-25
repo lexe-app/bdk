@@ -12,7 +12,8 @@ readme = "README.md"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-bdk-macros = "^0.6"
+bdk-macros = { path = "macros", version = "^0.6" }
+# bdk-macros = "^0.6"
 log = "0.4"
 miniscript = { version = "10.0", default-features = false, features = ["serde"] }
 bitcoin = { version = "0.30", default-features = false, features = ["serde", "base64", "rand-std"] }
@@ -114,6 +115,8 @@ lazy_static = "1.4"
 env_logger = { version = "0.7", default-features = false }
 electrsd = "0.24"
 assert_matches = "1.5.0"
+
+tokio = "1"
 
 [[example]]
 name = "compact_filters_balance"

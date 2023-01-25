@@ -179,7 +179,7 @@ impl<'a, Cs: Clone, Ctx, D> Clone for TxBuilder<'a, D, Cs, Ctx> {
 }
 
 // methods supported by both contexts, for any CoinSelectionAlgorithm
-impl<'a, D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>
+impl<'a, D: BatchDatabase + Send + Sync, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>
     TxBuilder<'a, D, Cs, Ctx>
 {
     /// Set a custom fee rate

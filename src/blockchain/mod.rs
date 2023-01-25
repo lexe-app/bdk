@@ -132,7 +132,7 @@ pub trait WalletSync {
     /// For types that do not have that distinction, only this method can be implemented, since
     /// [`WalletSync::wallet_sync`] defaults to calling this internally if not overridden.
     /// Populate the internal database with transactions and UTXOs
-    fn wallet_setup<D: BatchDatabase>(
+    fn wallet_setup<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         progress_update: Box<dyn Progress>,
@@ -155,7 +155,7 @@ pub trait WalletSync {
     /// [`BatchOperations::set_tx`]: crate::database::BatchOperations::set_tx
     /// [`BatchOperations::set_utxo`]: crate::database::BatchOperations::set_utxo
     /// [`BatchOperations::del_utxo`]: crate::database::BatchOperations::del_utxo
-    fn wallet_sync<D: BatchDatabase>(
+    fn wallet_sync<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         progress_update: Box<dyn Progress>,
@@ -211,7 +211,7 @@ fn sum_of_balances<B: BlockchainFactory>(blockchain_factory: B, wallets: &[Walle
 )]
 pub trait BlockchainFactory {
     /// The type returned when building a blockchain from this factory
-    type Inner: Blockchain;
+    type Inner: Blockchain + Send + Sync;
 
     /// Build a new blockchain for the given descriptor wallet_name
     ///
@@ -228,7 +228,7 @@ pub trait BlockchainFactory {
     ///
     /// Internally uses [`wallet_name_from_descriptor`] to derive the name, and then calls
     /// [`BlockchainFactory::build`] to create the blockchain instance.
-    fn build_for_wallet<D: BatchDatabase>(
+    fn build_for_wallet<D: BatchDatabase + Send + Sync>(
         &self,
         wallet: &Wallet<D>,
         override_skip_blocks: Option<u32>,
@@ -251,7 +251,7 @@ pub trait BlockchainFactory {
     /// blockchain multiple times.
     #[cfg(not(feature = "async-interface"))]
     #[cfg_attr(docsrs, doc(cfg(not(feature = "async-interface"))))]
-    fn sync_wallet<D: BatchDatabase>(
+    fn sync_wallet<D: BatchDatabase + Send + Sync>(
         &self,
         wallet: &Wallet<D>,
         override_skip_blocks: Option<u32>,
@@ -262,7 +262,7 @@ pub trait BlockchainFactory {
     }
 }
 
-impl<T: StatelessBlockchain> BlockchainFactory for Arc<T> {
+impl<T: StatelessBlockchain + Send + Sync> BlockchainFactory for Arc<T> {
     type Inner = Self;
 
     fn build(&self, _wallet_name: &str, _override_skip_blocks: Option<u32>) -> Result<Self, Error> {
@@ -336,7 +336,7 @@ impl Progress for LogProgress {
 }
 
 #[maybe_async]
-impl<T: Blockchain> Blockchain for Arc<T> {
+impl<T: Blockchain + Send + Sync> Blockchain for Arc<T> {
     fn get_capabilities(&self) -> HashSet<Capability> {
         maybe_await!(self.deref().get_capabilities())
     }
@@ -351,29 +351,29 @@ impl<T: Blockchain> Blockchain for Arc<T> {
 }
 
 #[maybe_async]
-impl<T: GetTx> GetTx for Arc<T> {
+impl<T: GetTx + Send + Sync> GetTx for Arc<T> {
     fn get_tx(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
         maybe_await!(self.deref().get_tx(txid))
     }
 }
 
 #[maybe_async]
-impl<T: GetHeight> GetHeight for Arc<T> {
+impl<T: GetHeight + Send + Sync> GetHeight for Arc<T> {
     fn get_height(&self) -> Result<u32, Error> {
         maybe_await!(self.deref().get_height())
     }
 }
 
 #[maybe_async]
-impl<T: GetBlockHash> GetBlockHash for Arc<T> {
+impl<T: GetBlockHash + Send + Sync> GetBlockHash for Arc<T> {
     fn get_block_hash(&self, height: u64) -> Result<BlockHash, Error> {
         maybe_await!(self.deref().get_block_hash(height))
     }
 }
 
 #[maybe_async]
-impl<T: WalletSync> WalletSync for Arc<T> {
-    fn wallet_setup<D: BatchDatabase>(
+impl<T: WalletSync + Send + Sync> WalletSync for Arc<T> {
+    fn wallet_setup<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         progress_update: Box<dyn Progress>,
@@ -381,7 +381,7 @@ impl<T: WalletSync> WalletSync for Arc<T> {
         maybe_await!(self.deref().wallet_setup(database, progress_update))
     }
 
-    fn wallet_sync<D: BatchDatabase>(
+    fn wallet_sync<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         progress_update: Box<dyn Progress>,

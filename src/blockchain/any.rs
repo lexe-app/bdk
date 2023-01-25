@@ -129,7 +129,7 @@ impl GetBlockHash for AnyBlockchain {
 
 #[maybe_async]
 impl WalletSync for AnyBlockchain {
-    fn wallet_sync<D: BatchDatabase>(
+    fn wallet_sync<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         progress_update: Box<dyn Progress>,
@@ -142,7 +142,7 @@ impl WalletSync for AnyBlockchain {
         ))
     }
 
-    fn wallet_setup<D: BatchDatabase>(
+    fn wallet_setup<D: BatchDatabase + Send + Sync>(
         &self,
         database: &RwLock<D>,
         progress_update: Box<dyn Progress>,

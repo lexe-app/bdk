@@ -5,7 +5,7 @@ pub(crate) mod tx {
     use bdk::{database::BatchDatabase, SignOptions, Wallet};
     use bitcoin::{Address, Transaction};
 
-    pub fn build_signed_tx<D: BatchDatabase>(
+    pub fn build_signed_tx<D: BatchDatabase + Send>(
         wallet: &Wallet<D>,
         recipient_address: &str,
         amount: u64,

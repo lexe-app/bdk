@@ -117,10 +117,10 @@ impl GetBlockHash for ElectrumBlockchain {
 impl WalletSync for ElectrumBlockchain {
     fn wallet_setup<D: BatchDatabase>(
         &self,
-        database: &RefCell<D>,
+        database: &RwLock<D>,
         _progress_update: Box<dyn Progress>,
     ) -> Result<(), Error> {
-        let mut database = database.borrow_mut();
+        let mut database = database.try_write().unwrap();
         let database = database.deref_mut();
         let mut request = script_sync::start(database, self.stop_gap)?;
         let mut block_times = HashMap::<u32, u32>::new();

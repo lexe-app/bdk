@@ -135,11 +135,11 @@ impl GetBlockHash for EsploraBlockchain {
 impl WalletSync for EsploraBlockchain {
     fn wallet_setup<D: BatchDatabase>(
         &self,
-        database: &RefCell<D>,
+        database: &RwLock<D>,
         _progress_update: Box<dyn Progress>,
     ) -> Result<(), Error> {
         use crate::blockchain::script_sync::Request;
-        let mut database = database.borrow_mut();
+        let mut database = database.try_write().unwrap();
         let database = database.deref_mut();
         let mut request = script_sync::start(database, self.stop_gap)?;
         let mut tx_index: HashMap<Txid, Tx> = HashMap::new();

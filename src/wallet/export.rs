@@ -131,7 +131,7 @@ impl FullyNodedExport {
         let descriptor = remove_checksum(descriptor);
         Self::is_compatible_with_core(&descriptor)?;
 
-        let blockheight = match wallet.database.borrow().iter_txs(false) {
+        let blockheight = match wallet.database.try_read().unwrap().iter_txs(false) {
             _ if !include_blockheight => 0,
             Err(_) => 0,
             Ok(txs) => txs

@@ -13,7 +13,6 @@
 //!
 //! This module defines the [`Wallet`] structure.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -29,6 +28,7 @@ use bitcoin::{
     Address, EcdsaSighashType, LockTime, Network, OutPoint, SchnorrSighashType, Script, Sequence,
     Transaction, TxOut, Txid, Witness,
 };
+use tokio::sync::RwLock;
 
 use miniscript::psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier};
 
@@ -96,7 +96,7 @@ pub struct Wallet<D> {
 
     network: Network,
 
-    database: RefCell<D>,
+    database: RwLock<D>,
 
     secp: SecpCtx,
 }
@@ -227,7 +227,7 @@ where
             signers,
             change_signers,
             network,
-            database: RefCell::new(database),
+            database: RwLock::new(database),
             secp,
         })
     }
@@ -375,7 +375,7 @@ where
         debug!("max_address {}", max_address);
         if self
             .database
-            .borrow()
+            .try_read().unwrap()
             .get_script_pubkey_from_path(KeychainKind::External, max_address.saturating_sub(1))?
             .is_none()
         {
@@ -392,7 +392,7 @@ where
 
             if self
                 .database
-                .borrow()
+                .try_read().unwrap()
                 .get_script_pubkey_from_path(KeychainKind::Internal, max_address.saturating_sub(1))?
                 .is_none()
             {
@@ -406,7 +406,7 @@ where
 
     /// Return whether or not a `script` is part of this wallet (either internal or external)
     pub fn is_mine(&self, script: &Script) -> Result<bool, Error> {
-        self.database.borrow().is_mine(script)
+        self.database.try_read().unwrap().is_mine(script)
     }
 
     /// Return the list of unspent outputs of this wallet
@@ -416,7 +416,7 @@ where
     pub fn list_unspent(&self) -> Result<Vec<LocalUtxo>, Error> {
         Ok(self
             .database
-            .borrow()
+            .try_read().unwrap()
             .iter_utxos()?
             .into_iter()
             .filter(|l| !l.is_spent)
@@ -426,7 +426,7 @@ where
     /// Returns the `UTXO` owned by this wallet corresponding to `outpoint` if it exists in the
     /// wallet's database.
     pub fn get_utxo(&self, outpoint: OutPoint) -> Result<Option<LocalUtxo>, Error> {
-        self.database.borrow().get_utxo(&outpoint)
+        self.database.try_read().unwrap().get_utxo(&outpoint)
     }
 
     /// Return a single transactions made and received by the wallet
@@ -441,7 +441,7 @@ where
         txid: &Txid,
         include_raw: bool,
     ) -> Result<Option<TransactionDetails>, Error> {
-        self.database.borrow().get_tx(txid, include_raw)
+        self.database.try_read().unwrap().get_tx(txid, include_raw)
     }
 
     /// Return an unsorted list of transactions made and received by the wallet
@@ -463,7 +463,7 @@ where
     /// Note that this method only operates on the internal database, which first needs to be
     /// [`Wallet::sync`] manually.
     pub fn list_transactions(&self, include_raw: bool) -> Result<Vec<TransactionDetails>, Error> {
-        self.database.borrow().iter_txs(include_raw)
+        self.database.try_read().unwrap().iter_txs(include_raw)
     }
 
     /// Return the balance, separated into available, trusted-pending, untrusted-pending and immature
@@ -477,7 +477,7 @@ where
         let mut untrusted_pending = 0;
         let mut confirmed = 0;
         let utxos = self.list_unspent()?;
-        let database = self.database.borrow();
+        let database = self.database.try_read().unwrap();
         let last_sync_height = match database
             .get_sync_time()?
             .map(|sync_time| sync_time.block_time.height)
@@ -845,7 +845,7 @@ where
         };
 
         let coin_selection = coin_selection.coin_select(
-            self.database.borrow().deref(),
+            self.database.try_read().unwrap().deref(),
             required_utxos,
             optional_utxos,
             fee_rate,
@@ -977,7 +977,7 @@ where
         &self,
         txid: Txid,
     ) -> Result<TxBuilder<'_, D, DefaultCoinSelectionAlgorithm, BumpFee>, Error> {
-        let mut details = match self.database.borrow().get_tx(&txid, true)? {
+        let mut details = match self.database.try_read().unwrap().get_tx(&txid, true)? {
             None => return Err(Error::TransactionNotFound),
             Some(tx) if tx.transaction.is_none() => return Err(Error::TransactionNotFound),
             Some(tx) if tx.confirmation_time.is_some() => return Err(Error::TransactionConfirmed),
@@ -1001,13 +1001,13 @@ where
             .map(|txin| -> Result<_, Error> {
                 let txout = self
                     .database
-                    .borrow()
+                    .try_read().unwrap()
                     .get_previous_output(&txin.previous_output)?
                     .ok_or(Error::UnknownUtxo)?;
 
                 let (weight, keychain) = match self
                     .database
-                    .borrow()
+                    .try_read().unwrap()
                     .get_path_from_script_pubkey(&txout.script_pubkey)?
                 {
                     Some((keychain, _)) => (
@@ -1046,7 +1046,7 @@ where
                 let (_, change_type) = self._get_descriptor_for_keychain(KeychainKind::Internal);
                 match self
                     .database
-                    .borrow()
+                    .try_read().unwrap()
                     .get_path_from_script_pubkey(&txout.script_pubkey)?
                 {
                     Some((keychain, _)) if keychain == change_type => change_index = Some(index),
@@ -1221,7 +1221,7 @@ where
             // that as a very high value
             let create_height = self
                 .database
-                .borrow()
+                .try_read().unwrap()
                 .get_tx(&input.previous_output.txid, false)?
                 .map(|tx| tx.confirmation_time.map(|c| c.height).unwrap_or(u32::MAX));
             let last_sync_height = self
@@ -1320,7 +1320,7 @@ where
     fn get_descriptor_for_txout(&self, txout: &TxOut) -> Result<Option<DerivedDescriptor>, Error> {
         Ok(self
             .database
-            .borrow()
+            .try_read().unwrap()
             .get_path_from_script_pubkey(&txout.script_pubkey)?
             .map(|(keychain, child)| (self.get_descriptor_for_keychain(keychain), child))
             .map(|(desc, child)| desc.at_derivation_index(child)))
@@ -1330,12 +1330,12 @@ where
         let (descriptor, keychain) = self._get_descriptor_for_keychain(keychain);
         let index = match descriptor.has_wildcard() {
             false => 0,
-            true => self.database.borrow_mut().increment_last_index(keychain)?,
+            true => self.database.try_write().unwrap().increment_last_index(keychain)?,
         };
 
         if self
             .database
-            .borrow()
+            .try_read().unwrap()
             .get_script_pubkey_from_path(keychain, index)?
             .is_none()
         {
@@ -1349,7 +1349,7 @@ where
         let (descriptor, keychain) = self._get_descriptor_for_keychain(keychain);
         let index = match descriptor.has_wildcard() {
             false => Some(0),
-            true => self.database.borrow_mut().get_last_index(keychain)?,
+            true => self.database.try_write().unwrap().get_last_index(keychain)?,
         };
 
         if let Some(i) = index {
@@ -1360,7 +1360,7 @@ where
     }
 
     fn set_index(&self, keychain: KeychainKind, index: u32) -> Result<(), Error> {
-        self.database.borrow_mut().set_last_index(keychain, index)?;
+        self.database.try_write().unwrap().set_last_index(keychain, index)?;
         Ok(())
     }
 
@@ -1379,7 +1379,7 @@ where
             count = 1;
         }
 
-        let mut address_batch = self.database.borrow().begin_batch();
+        let mut address_batch = self.database.try_read().unwrap().begin_batch();
 
         let start_time = time::Instant::new();
         for i in from..(from + count) {
@@ -1397,7 +1397,7 @@ where
             start_time.elapsed().as_millis()
         );
 
-        self.database.borrow_mut().commit_batch(address_batch)?;
+        self.database.try_write().unwrap().commit_batch(address_batch)?;
 
         Ok(())
     }
@@ -1449,7 +1449,7 @@ where
             return Ok((must_spend, vec![]));
         }
 
-        let database = self.database.borrow();
+        let database = self.database.try_read().unwrap();
         let satisfies_confirmed = may_spend
             .iter()
             .map(|u| {
@@ -1604,7 +1604,7 @@ where
         // and the derivation index
         let (keychain, child) = self
             .database
-            .borrow()
+            .try_read().unwrap()
             .get_path_from_script_pubkey(&utxo.txout.script_pubkey)?
             .ok_or(Error::UnknownUtxo)?;
 
@@ -1621,7 +1621,7 @@ where
             .map_err(MiniscriptPsbtError::Conversion)?;
 
         let prev_output = utxo.outpoint;
-        if let Some(prev_tx) = self.database.borrow().get_raw_tx(&prev_output.txid)? {
+        if let Some(prev_tx) = self.database.try_read().unwrap().get_raw_tx(&prev_output.txid)? {
             if desc.is_witness() || desc.is_taproot() {
                 psbt_input.witness_utxo = Some(prev_tx.output[prev_output.vout as usize].clone());
             }
@@ -1656,7 +1656,7 @@ where
         for (is_input, index, out) in utxos.into_iter() {
             if let Some((keychain, child)) = self
                 .database
-                .borrow()
+                .try_read().unwrap()
                 .get_path_from_script_pubkey(&out.script_pubkey)?
             {
                 debug!(
@@ -1682,7 +1682,7 @@ where
 
     /// Return an immutable reference to the internal database
     pub fn database(&self) -> impl std::ops::Deref<Target = D> + '_ {
-        self.database.borrow()
+        self.database.try_read().unwrap()
     }
 
     /// Sync the internal database with the blockchain
@@ -1722,10 +1722,10 @@ where
             let sync_res =
                 if run_setup {
                     maybe_await!(blockchain
-                        .wallet_setup(self.database.borrow_mut().deref_mut(), new_progress()))
+                        .wallet_setup(self.database.try_write().unwrap().deref_mut(), new_progress()))
                 } else {
                     maybe_await!(blockchain
-                        .wallet_sync(self.database.borrow_mut().deref_mut(), new_progress()))
+                        .wallet_sync(self.database.try_write().unwrap().deref_mut(), new_progress()))
                 };
 
             // If the error is the special `MissingCachedScripts` error, we return the number of
@@ -1759,7 +1759,7 @@ where
             },
         };
         debug!("Saving `sync_time` = {:?}", sync_time);
-        self.database.borrow_mut().set_sync_time(sync_time)?;
+        self.database.try_write().unwrap().set_sync_time(sync_time)?;
 
         Ok(())
     }
@@ -1829,7 +1829,7 @@ pub fn get_funded_wallet(
 
     wallet
         .database
-        .borrow_mut()
+        .try_write().unwrap()
         .set_script_pubkey(
             &bitcoin::Address::from_str(&tx_meta.output.get(0).unwrap().to_address)
                 .unwrap()
@@ -1840,11 +1840,11 @@ pub fn get_funded_wallet(
         .unwrap();
     wallet
         .database
-        .borrow_mut()
+        .try_write().unwrap()
         .set_last_index(KeychainKind::External, funding_address_kix)
         .unwrap();
 
-    let txid = crate::populate_test_db!(wallet.database.borrow_mut(), tx_meta, Some(100));
+    let txid = crate::populate_test_db!(wallet.database.try_write().unwrap(), tx_meta, Some(100));
 
     (wallet, descriptors, txid)
 }
@@ -1936,13 +1936,13 @@ pub(crate) mod test {
 
         assert!(wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .get_script_pubkey_from_path(KeychainKind::External, 0)
             .unwrap()
             .is_some());
         assert!(wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .get_script_pubkey_from_path(KeychainKind::Internal, 0)
             .unwrap()
             .is_none());
@@ -1964,13 +1964,13 @@ pub(crate) mod test {
 
         assert!(wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .get_script_pubkey_from_path(KeychainKind::External, CACHE_ADDR_BATCH_SIZE - 1)
             .unwrap()
             .is_some());
         assert!(wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .get_script_pubkey_from_path(KeychainKind::External, CACHE_ADDR_BATCH_SIZE)
             .unwrap()
             .is_none());
@@ -1987,7 +1987,7 @@ pub(crate) mod test {
         );
         assert!(wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .get_script_pubkey_from_path(KeychainKind::External, CACHE_ADDR_BATCH_SIZE - 1)
             .unwrap()
             .is_some());
@@ -1998,7 +1998,7 @@ pub(crate) mod test {
 
         assert!(wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .get_script_pubkey_from_path(KeychainKind::External, CACHE_ADDR_BATCH_SIZE * 2 - 1)
             .unwrap()
             .is_some());
@@ -2179,7 +2179,7 @@ pub(crate) mod test {
         };
 
         // Add the transaction to our db, but do not sync the db.
-        crate::populate_test_db!(wallet.database.borrow_mut(), tx_meta, None);
+        crate::populate_test_db!(wallet.database.try_write().unwrap(), tx_meta, None);
 
         let addr = wallet.get_address(New).unwrap();
         let mut builder = wallet.build_tx();
@@ -2205,7 +2205,7 @@ pub(crate) mod test {
         };
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_sync_time(sync_time)
             .unwrap();
         let current_height = 25;
@@ -2230,7 +2230,7 @@ pub(crate) mod test {
         };
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_sync_time(sync_time.clone())
             .unwrap();
         let (psbt, _) = builder.finish().unwrap();
@@ -2389,7 +2389,7 @@ pub(crate) mod test {
 
         // Add the transaction to our db, but do not sync the db. Unsynced db
         // should trigger the default sequence value for a new transaction as 0xFFFFFFFF
-        crate::populate_test_db!(wallet.database.borrow_mut(), tx_meta, None);
+        crate::populate_test_db!(wallet.database.try_write().unwrap(), tx_meta, None);
 
         let addr = wallet.get_address(New).unwrap();
         let mut builder = wallet.build_tx();
@@ -2828,7 +2828,7 @@ pub(crate) mod test {
     fn test_create_tx_add_utxo() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         let small_output_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -2857,7 +2857,7 @@ pub(crate) mod test {
     fn test_create_tx_manually_selected_insufficient() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         let small_output_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -2903,7 +2903,7 @@ pub(crate) mod test {
 
         // Add the transaction to our db, but do not sync the db. Unsynced db
         // should trigger the default sequence value for a new transaction as 0xFFFFFFFF
-        crate::populate_test_db!(wallet.database.borrow_mut(), tx_meta, None);
+        crate::populate_test_db!(wallet.database.try_write().unwrap(), tx_meta, None);
 
         let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
         let root_id = external_policy.id;
@@ -3051,7 +3051,7 @@ pub(crate) mod test {
         let utxo2 = wallet2.list_unspent().unwrap().remove(0);
         let tx1 = wallet1
             .database
-            .borrow()
+            .try_read().unwrap()
             .get_tx(&txid1, true)
             .unwrap()
             .unwrap()
@@ -3059,7 +3059,7 @@ pub(crate) mod test {
             .unwrap();
         let tx2 = wallet2
             .database
-            .borrow()
+            .try_read().unwrap()
             .get_tx(&txid2, true)
             .unwrap()
             .unwrap()
@@ -3151,7 +3151,7 @@ pub(crate) mod test {
             let mut builder = builder.clone();
             let tx2 = wallet2
                 .database
-                .borrow()
+                .try_read().unwrap()
                 .get_tx(&txid2, true)
                 .unwrap()
                 .unwrap()
@@ -3231,7 +3231,7 @@ pub(crate) mod test {
         let txid = tx.txid();
         // skip saving the utxos, we know they can't be used anyways
         details.transaction = Some(tx);
-        wallet.database.borrow_mut().set_tx(&details).unwrap();
+        wallet.database.try_write().unwrap().set_tx(&details).unwrap();
 
         wallet.build_fee_bump(txid).unwrap().finish().unwrap();
     }
@@ -3253,7 +3253,7 @@ pub(crate) mod test {
             timestamp: 12345678,
             height: 42,
         });
-        wallet.database.borrow_mut().set_tx(&details).unwrap();
+        wallet.database.try_write().unwrap().set_tx(&details).unwrap();
 
         wallet.build_fee_bump(txid).unwrap().finish().unwrap();
     }
@@ -3273,7 +3273,7 @@ pub(crate) mod test {
         let txid = tx.txid();
         // skip saving the utxos, we know they can't be used anyways
         details.transaction = Some(tx);
-        wallet.database.borrow_mut().set_tx(&details).unwrap();
+        wallet.database.try_write().unwrap().set_tx(&details).unwrap();
 
         let mut builder = wallet.build_fee_bump(txid).unwrap();
         builder.fee_rate(FeeRate::from_sat_per_vb(1.0));
@@ -3295,7 +3295,7 @@ pub(crate) mod test {
         let txid = tx.txid();
         // skip saving the utxos, we know they can't be used anyways
         details.transaction = Some(tx);
-        wallet.database.borrow_mut().set_tx(&details).unwrap();
+        wallet.database.try_write().unwrap().set_tx(&details).unwrap();
 
         let mut builder = wallet.build_fee_bump(txid).unwrap();
         builder.fee_absolute(10);
@@ -3317,7 +3317,7 @@ pub(crate) mod test {
         let txid = tx.txid();
         // skip saving the utxos, we know they can't be used anyways
         details.transaction = Some(tx);
-        wallet.database.borrow_mut().set_tx(&details).unwrap();
+        wallet.database.try_write().unwrap().set_tx(&details).unwrap();
 
         let mut builder = wallet.build_fee_bump(txid).unwrap();
         builder.fee_absolute(0);
@@ -3340,14 +3340,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3400,14 +3400,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3466,14 +3466,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3510,14 +3510,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3543,7 +3543,7 @@ pub(crate) mod test {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         // receive an extra tx so that our wallet has two utxos.
         let incoming_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3566,14 +3566,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
         assert_eq!(original_details.sent, 25_000);
@@ -3600,7 +3600,7 @@ pub(crate) mod test {
         // existing output. In other words, bump_fee + manually_selected_only is always an error
         // unless you've also set "allow_shrinking" OR there is a change output.
         let incoming_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3623,14 +3623,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
         assert_eq!(original_details.sent, 25_000);
@@ -3646,7 +3646,7 @@ pub(crate) mod test {
     fn test_bump_fee_add_input() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3664,14 +3664,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3709,7 +3709,7 @@ pub(crate) mod test {
     fn test_bump_fee_absolute_add_input() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3727,14 +3727,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3772,7 +3772,7 @@ pub(crate) mod test {
     fn test_bump_fee_no_change_add_input_and_change() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         let incoming_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3798,14 +3798,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3849,7 +3849,7 @@ pub(crate) mod test {
     fn test_bump_fee_add_input_change_dust() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3869,7 +3869,7 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
@@ -3877,7 +3877,7 @@ pub(crate) mod test {
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3926,7 +3926,7 @@ pub(crate) mod test {
     fn test_bump_fee_force_add_input() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         let incoming_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -3944,14 +3944,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -3997,7 +3997,7 @@ pub(crate) mod test {
     fn test_bump_fee_absolute_force_add_input() {
         let (wallet, descriptors, _) = get_funded_wallet(get_test_wpkh());
         let incoming_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -4015,14 +4015,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -4084,7 +4084,7 @@ pub(crate) mod test {
         // Now we receive one transaction with 0 confirmations. We won't be able to use that for
         // fee bumping, as it's still unconfirmed!
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 0)),
             Some(100),
         );
@@ -4094,14 +4094,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -4122,7 +4122,7 @@ pub(crate) mod test {
         // We receive a tx with 0 confirmations, which will be used as an input
         // in the drain tx.
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 0)),
             Some(100),
         );
@@ -4138,14 +4138,14 @@ pub(crate) mod test {
             txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
             wallet
                 .database
-                .borrow_mut()
+                .try_write().unwrap()
                 .del_utxo(&txin.previous_output)
                 .unwrap();
         }
         original_details.transaction = Some(tx);
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_tx(&original_details)
             .unwrap();
 
@@ -4171,7 +4171,7 @@ pub(crate) mod test {
         let send_to = Address::from_str("tb1ql7w62elx9ucw4pj5lgw4l028hmuw80sndtntxt").unwrap();
         let fee_rate = FeeRate::from_sat_per_vb(2.01);
         let incoming_txid = crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 8859 ) (@confirmations 1)),
             Some(100),
         );
@@ -4489,7 +4489,7 @@ pub(crate) mod test {
 
         // use the above address
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(100),
         );
@@ -5318,7 +5318,7 @@ pub(crate) mod test {
         let confirmation_time = 5;
 
         crate::populate_test_db!(
-            wallet.database.borrow_mut(),
+            wallet.database.try_write().unwrap(),
             testutils! (@tx ( (@external descriptors, 0) => 25_000 ) (@confirmations 1)),
             Some(confirmation_time),
             (@coinbase true)
@@ -5331,7 +5331,7 @@ pub(crate) mod test {
         };
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_sync_time(sync_time)
             .unwrap();
 
@@ -5386,7 +5386,7 @@ pub(crate) mod test {
         };
         wallet
             .database
-            .borrow_mut()
+            .try_write().unwrap()
             .set_sync_time(sync_time)
             .unwrap();
 
